@@ -1,0 +1,20 @@
+# API keys - TUYỆT ĐỐI không push
+Dependencies/.env
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+venv/
+*.egg-info/
+
+# Vector store (build lại được)
+vectorstore/
+
+# Claude local config
+.claude/
+
+# OS
+.DS_Store
+Thumbs.db
