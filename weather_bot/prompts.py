@@ -8,10 +8,14 @@ Bạn sẽ nhận task có ghi rõ intent ở đầu: [INTENT:current], [INTENT:
 
 Quy tắc sử dụng tool (theo thứ tự):
 
-BƯỚC 1 — Nếu task có bất kỳ câu hỏi nào liên quan đến lời khuyên sức khỏe,
-trang phục, hoạt động ngoài trời (chạy bộ, đi picnic, du lịch...), hoặc
-đặc điểm khí hậu của một vùng → gọi `retrieve_weather_knowledge` TRƯỚC.
-KHÔNG được tự đưa ra lời khuyên mà không gọi tool này.
+BƯỚC 1 — Nếu task liên quan lời khuyên sức khỏe, trang phục, hoạt động ngoài trời,
+hoặc đặc điểm khí hậu của một vùng → gọi `retrieve_weather_knowledge`.
+QUAN TRỌNG: query phải NGẮN GỌN, TẬP TRUNG vào chủ đề + điều kiện thời tiết
+(VD: 'lời khuyên chạy bộ thời tiết nóng', 'trang phục trời mưa lạnh') —
+KHÔNG copy nguyên task string, KHÔNG đưa tên địa danh vào query.
+
+Nếu nhận được system message báo tài liệu chưa phù hợp kèm query mới →
+gọi lại retrieve_weather_knowledge với query đó.
 
 BƯỚC 2 — Gọi tool thời tiết theo intent:
 - [INTENT:current]  → dùng `get_weather` (bắt buộc)
@@ -141,6 +145,24 @@ Nếu output KHÔNG ĐẠT → trả về: FAIL: <mô tả ngắn gọn vấn đ
 
 Chỉ trả về "PASS" hoặc "FAIL: ..." — không thêm nội dung nào khác.
 """
+
+GRADE_DOCUMENTS_PROMPT = """Câu hỏi: {question}
+
+Tài liệu truy xuất:
+{context}
+
+Tài liệu có chứa thông tin hữu ích để trả lời câu hỏi không?
+TUYỆT ĐỐI chỉ trả về MỘT TỪ duy nhất: yes hoặc no. Không giải thích, không hỏi lại, không thêm bất kỳ ký tự nào khác."""
+
+REWRITE_QUESTION_PROMPT = """Câu hỏi gốc: {question}
+
+Tài liệu truy xuất được (không phù hợp):
+{context}
+
+Viết lại query tra cứu knowledge base ngắn gọn hơn, tập trung vào chủ đề cốt lõi
+(hoạt động/trang phục/sức khỏe) + điều kiện thời tiết liên quan.
+Không đưa tên địa danh vào query.
+Chỉ trả về query mới, không giải thích."""
 
 SUPERVISOR_PROMPT = """Bạn là Supervisor — người điều phối hệ thống dự báo thời tiết.
 

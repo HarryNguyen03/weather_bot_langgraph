@@ -34,7 +34,8 @@ from typing import Annotated
 from pathlib import Path
 
 from dotenv import load_dotenv
-from langchain_core.messages import SystemMessage, ToolMessage
+from uuid import uuid4
+from langchain_core.messages import AIMessage, SystemMessage, ToolMessage
 from langchain_core.tools import tool
 from langchain_mcp_adapters.client import MultiServerMCPClient
 from langchain_ollama import ChatOllama
@@ -44,7 +45,7 @@ from langgraph.types import Command
 
 from state import State
 from prompts import SUPERVISOR_PROMPT, VALIDATOR_PROMPT, WEATHER_REPORTER_PROMPT
-from sub_agents import build_weather_analyst
+from analyst import build_analyst_graph
 from chart_utils import send_chart_to_telegram
 from rag import build_vectorstore, build_retriever_tool
 
@@ -91,6 +92,7 @@ _vectorstore   = None
 _llm           = None
 _llm_with_tools = None
 _supervisor_graph = None
+_analyst_graph = None
 _weather_tools = None   # weather MCP tools + retriever tool
 
 
@@ -140,14 +142,6 @@ def _get_tool_call_id(state: State, tool_name: str) -> str:
 # Tools (module level — dùng InjectedState để đọc state, Command để ghi state)
 # ---------------------------------------------------------------------------
 
-RETRIEVAL_KEYWORDS = [
-    "chạy bộ", "tập thể dục", "tập gym", "yoga", "picnic",
-    "du lịch", "nên mặc", "mặc gì", "trang phục", "có nên",
-    "sức khỏe", "hoạt động", "đi bộ", "đạp xe", "bơi lội",
-    "khí hậu", "đặc điểm", "thời điểm nào", "mùa nào"
-]
-
-
 @tool
 async def call_weather_analyst(
     task: str,
@@ -162,52 +156,6 @@ async def call_weather_analyst(
     print("\n  [Weather Analyst] Đang xử lý...")
 
     messages = [{"role": "user", "content": task}]
-    rag_docs_to_store: list = []
-
-    # Force RAG: detect keyword → retrieve → grade → inject vào system message
-    if any(kw in task.lower() for kw in RETRIEVAL_KEYWORDS):
-        retriever = _vectorstore.as_retriever(search_kwargs={"k": 3})
-        docs = retriever.invoke(task)
-        if docs:
-            relevant_docs = []
-            for i, doc in enumerate(docs, 1):
-                src = doc.metadata.get("source", "knowledge base")
-                preview = doc.page_content[:300].replace("\n", " ")
-                print(f"\n  [RAG] Chunk {i} [{src}]: {preview}{'...' if len(doc.page_content) > 300 else ''}")
-                grade_prompt = (
-                    f"Query: {task}\n\n"
-                    f"Document:\n{doc.page_content[:400]}\n\n"
-                    "Tài liệu này có chứa thông tin hữu ích để trả lời query không?\n"
-                    "Trả về đúng một từ: yes hoặc no"
-                )
-                grade_resp = await _llm.ainvoke([SystemMessage(content=grade_prompt)])
-                grade = (grade_resp.content or "").strip().lower()
-                if grade.startswith("yes"):
-                    relevant_docs.append(doc)
-                    print(f"  [RAG Grader] ✅ relevant — [{src}]")
-                else:
-                    print(f"  [RAG Grader] ❌ not relevant — [{src}]")
-
-            if relevant_docs:
-                rag_docs_to_store = [
-                    {"page_content": doc.page_content, "source": doc.metadata.get("source", "knowledge base")}
-                    for doc in relevant_docs
-                ]
-                context = "\n\n---\n\n".join([
-                    f"[Nguồn: {d['source']}]\n{d['page_content']}"
-                    for d in rag_docs_to_store
-                ])
-                messages.insert(0, {
-                    "role": "system",
-                    "content": (
-                        "[KNOWLEDGE BASE] Thông tin tham khảo từ knowledge base — "
-                        "BẮT BUỘC dùng thông tin này để trả lời, không được tự bịa:\n\n"
-                        f"{context}"
-                    )
-                })
-                print(f"\n  [RAG] ✅ Injected {len(relevant_docs)}/{len(docs)} relevant chunks vào analyst context")
-            else:
-                print(f"\n  [RAG] ⚠️ 0/{len(docs)} docs passed grading — không inject")
 
     # [VALIDATOR] Inject feedback từ state nếu đây là retry
     feedback = state.get("validator_feedback")
@@ -218,10 +166,13 @@ async def call_weather_analyst(
         })
         print(f"\n  [Analyst] ↩ Retry với feedback: {feedback[:80]}")
 
-    agent  = build_weather_analyst(_llm, _weather_tools)
-    result = await agent.ainvoke({"messages": messages})
+    result = await _analyst_graph.ainvoke({
+        "messages":      messages,
+        "rewrite_count": 0,
+        "docs_relevant": True,
+    })
 
-    # Python tự extract raw forecast JSON từ tool message history
+    # Extract forecast_json từ ToolMessage của get_5day_forecast
     forecast_json = None
     for msg in result["messages"]:
         if getattr(msg, "name", None) == "get_5day_forecast" and msg.content:
@@ -235,12 +186,31 @@ async def call_weather_analyst(
                 forecast_json = content
             break
 
+    # Extract rag_docs từ tất cả ToolMessage của retrieve_weather_knowledge
+    rag_docs_to_store: list = []
+    _no_result_msg = "Không tìm thấy thông tin liên quan trong knowledge base."
+    for msg in result["messages"]:
+        if (type(msg).__name__ == "ToolMessage"
+                and getattr(msg, "name", "") == "retrieve_weather_knowledge"
+                and msg.content):
+            content = msg.content
+            if isinstance(content, list):
+                content = "".join(
+                    item.get("text", "") if isinstance(item, dict) else str(item)
+                    for item in content
+                )
+            content = str(content or "")
+            if content and content != _no_result_msg:
+                rag_docs_to_store.append({"page_content": content, "source": "knowledge base"})
+
     analysis = _extract_final_response(result)
 
     if forecast_json:
         print(f"\n  [Analyst] ✅ forecast_json cached ({len(forecast_json)} chars)")
     else:
         print("\n  [Analyst] ℹ️ Không có forecast_json (intent=current hoặc tool chưa gọi)")
+    if rag_docs_to_store:
+        print(f"\n  [Analyst] ✅ rag_docs: {len(rag_docs_to_store)} retrieve result(s) captured")
 
     tool_call_id = _get_tool_call_id(state, "call_weather_analyst")
 
@@ -442,9 +412,11 @@ async def validate_analyst_output(state: State) -> dict:
             f"{kb_text}\n\n"
             "Analyst output:\n"
             f"{analysis[:1500]}\n\n"
-            "Kiểm tra: Các lời khuyên về sức khỏe, trang phục, hoặc hoạt động trong output "
-            "có được hỗ trợ bởi knowledge base không, hay analyst tự bịa?\n"
-            "Trả về: 'grounded' hoặc 'hallucinated: <mô tả phần bịa>'"
+            "Kiểm tra: Các lời khuyên trong output có MÂU THUẪN với knowledge base, "
+            "hoặc gán cho knowledge base nội dung không tồn tại trong đó không?\n"
+            "Lời khuyên an toàn phổ quát (VD: trời nóng → uống nhiều nước, giảm cường độ vận động) "
+            "nhất quán với dữ liệu thời tiết thực tế được coi là grounded kể cả khi không có trong KB.\n"
+            "Trả về: 'grounded' hoặc 'hallucinated: <mô tả phần mâu thuẫn>'"
         )
         try:
             h_resp = await _llm.ainvoke([SystemMessage(content=hallucination_prompt)])
@@ -492,6 +464,30 @@ async def agent_node(state: State) -> dict:
     return {"messages": [response]}
 
 
+async def force_retry_node(state: State) -> dict:
+    """Bypass LLM — tạo tool call call_weather_analyst trực tiếp để đảm bảo retry."""
+    task = ""
+    for msg in reversed(state["messages"]):
+        if type(msg).__name__ == "AIMessage":
+            for tc in getattr(msg, "tool_calls", []):
+                if tc["name"] == "call_weather_analyst":
+                    task = tc.get("args", {}).get("task", "")
+                    break
+        if task:
+            break
+
+    print(f"\n  [VALIDATOR] Force retry → call_weather_analyst (task: {task[:80]}...)")
+    return {"messages": [AIMessage(
+        content="",
+        tool_calls=[{
+            "name": "call_weather_analyst",
+            "args": {"task": task},
+            "id":   "retry_" + uuid4().hex[:8],
+            "type": "tool_call",
+        }],
+    )]}
+
+
 # ---------------------------------------------------------------------------
 # Graph edge functions
 # ---------------------------------------------------------------------------
@@ -510,10 +506,10 @@ def after_tools_check(state: State) -> str:
 
 
 def should_retry(state: State) -> str:
-    """[VALIDATOR] Trả về 'analyst' nếu cần retry, 'reporter' nếu đã pass hoặc hết lượt."""
+    """[VALIDATOR] Trả về 'force_retry' nếu cần retry, 'reporter' nếu đã pass hoặc hết lượt."""
     if state.get("validator_feedback") is not None and state.get("retry_count", 0) <= 2:
         print(f"\n  [VALIDATOR] → Retry analyst (lần {state['retry_count']})")
-        return "analyst"
+        return "force_retry"
     print(f"\n  [VALIDATOR] → Tiếp tục reporter")
     return "reporter"
 
@@ -532,7 +528,8 @@ def should_continue(state: State) -> str:
 
 async def init_resources():
     """Gọi một lần khi bot khởi động. Build toàn bộ resources + compile graph."""
-    global _mcp_client, _all_tools, _vectorstore, _llm, _llm_with_tools, _supervisor_graph, _weather_tools
+    global _mcp_client, _all_tools, _vectorstore, _llm, _llm_with_tools, \
+           _supervisor_graph, _analyst_graph, _weather_tools
 
     _mcp_client = MultiServerMCPClient(MCP_CONFIG)
     _all_tools  = await _mcp_client.get_tools()
@@ -545,18 +542,23 @@ async def init_resources():
     retriever_tool = build_retriever_tool(_vectorstore)
     _weather_tools = weather_base + [retriever_tool]
 
-    # LLM + supervisor tools
+    # LLM
     _llm = build_llm()
+
+    # Analyst graph — compile một lần
+    _analyst_graph = build_analyst_graph(_llm, _weather_tools)
+
+    # Supervisor tools + graph — compile một lần
     supervisor_tools = [call_weather_analyst, call_weather_reporter, send_plain_message]
     _llm_with_tools  = _llm.bind_tools(supervisor_tools)
 
-    # Compile graph một lần — tái dùng mọi request
     tool_node = ToolNode(supervisor_tools)
 
     graph = StateGraph(State)
-    graph.add_node("agent", agent_node)
-    graph.add_node("tools", tool_node)
-    graph.add_node("validator", validate_analyst_output)
+    graph.add_node("agent",       agent_node)
+    graph.add_node("tools",       tool_node)
+    graph.add_node("validator",   validate_analyst_output)
+    graph.add_node("force_retry", force_retry_node)
     graph.add_edge(START, "agent")
     graph.add_conditional_edges(
         "agent",
@@ -571,11 +573,12 @@ async def init_resources():
     graph.add_conditional_edges(
         "validator",
         should_retry,
-        {"analyst": "agent", "reporter": "agent"},
+        {"force_retry": "force_retry", "reporter": "agent"},
     )
+    graph.add_edge("force_retry", "tools")
 
     _supervisor_graph = graph.compile()
-    print("[INIT] MCP tools + vectorstore + graph sẵn sàng.")
+    print("[INIT] MCP tools + vectorstore + analyst graph + supervisor graph sẵn sàng.")
 
 
 # ---------------------------------------------------------------------------

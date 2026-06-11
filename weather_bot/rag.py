@@ -60,7 +60,7 @@ def build_vectorstore() -> InMemoryVectorStore:
 
 def build_retriever_tool(vectorstore: InMemoryVectorStore):
     """Tạo retriever tool để Weather Analyst tra cứu knowledge base."""
-    retriever = vectorstore.as_retriever(search_kwargs={"k": 3})
+    retriever = vectorstore.as_retriever(search_kwargs={"k": 4})
 
     @tool
     def retrieve_weather_knowledge(query: str) -> str:
