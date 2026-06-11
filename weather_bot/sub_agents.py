@@ -29,18 +29,19 @@ def build_weather_analyst(llm: ChatOllama, tools: list):
     )
 
 
-def build_weather_reporter(llm: ChatOllama, tools: list):
-    """
-    Weather Reporter: nhận telegram tools đã bind chat_id từ supervisor.py
-    (send_telegram_message — schema chỉ có `message`).
-    Soạn và gửi text báo cáo thời tiết qua Telegram.
-    Biểu đồ PNG được gửi trước bởi Python code trong call_weather_reporter — không qua LLM.
-    """
-    return create_react_agent(
-        model=llm,
-        tools=tools,
-        prompt=WEATHER_REPORTER_PROMPT,
-        name="weather_reporter",
-    )
+# DEPRECATED: thay bằng LLM workflow trong call_weather_reporter — giữ lại để so sánh before/after
+# def build_weather_reporter(llm: ChatOllama, tools: list):
+#     """
+#     Weather Reporter: nhận telegram tools đã bind chat_id từ supervisor.py
+#     (send_telegram_message — schema chỉ có `message`).
+#     Soạn và gửi text báo cáo thời tiết qua Telegram.
+#     Biểu đồ PNG được gửi trước bởi Python code trong call_weather_reporter — không qua LLM.
+#     """
+#     return create_react_agent(
+#         model=llm,
+#         tools=tools,
+#         prompt=WEATHER_REPORTER_PROMPT,
+#         name="weather_reporter",
+#     )
 
 

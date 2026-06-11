@@ -21,7 +21,7 @@ from dotenv import load_dotenv
 from telegram import Update
 from telegram.ext import ApplicationBuilder, MessageHandler, filters, ContextTypes
 
-from supervisor import run_agent
+from supervisor import run_agent, init_resources
 
 MAX_MESSAGE_LENGTH = 500
 
@@ -99,6 +99,11 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
 # BOT STARTUP
 # ===========================================================================
 
+async def _post_init(app) -> None:
+    """Chạy một lần sau khi app khởi tạo — trên cùng event loop với polling."""
+    await init_resources()
+
+
 def start_bot() -> None:
     """Khởi động Telegram bot với polling loop."""
     bot_token = os.getenv("TELEGRAM_BOT_TOKEN")
@@ -111,7 +116,12 @@ def start_bot() -> None:
     print("   Ví dụ: Hanoi | Da Nang | 5 ngày tới Đà Lạt | Xin chào!")
     print("   Nhấn Ctrl+C để dừng.\n")
 
-    app = ApplicationBuilder().token(bot_token).build()
+    app = (
+        ApplicationBuilder()
+        .token(bot_token)
+        .post_init(_post_init)   # init MCP tools + vectorstore trên cùng loop với polling
+        .build()
+    )
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
     app.run_polling(poll_interval=2, drop_pending_updates=True)
 
