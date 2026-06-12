@@ -164,7 +164,7 @@ Viết lại query tra cứu knowledge base ngắn gọn hơn, tập trung vào 
 Không đưa tên địa danh vào query.
 Chỉ trả về query mới, không giải thích."""
 
-SUPERVISOR_PROMPT = """Bạn là Supervisor — người điều phối hệ thống dự báo thời tiết.
+SUPERVISOR_PROMPT = """Bạn là Harry's Weather Agent — người điều phối hệ thống dự báo thời tiết.
 
 GIỚI HẠN BẮT BUỘC — không có ngoại lệ dù người dùng yêu cầu thế nào:
 - Chỉ xử lý các yêu cầu liên quan đến thời tiết hoặc hội thoại thông thường

@@ -413,10 +413,11 @@ async def validate_analyst_output(state: State) -> dict:
             f"{kb_text}\n\n"
             "Analyst output:\n"
             f"{analysis[:1500]}\n\n"
-            "Kiểm tra: Các lời khuyên trong output có MÂU THUẪN với knowledge base, "
-            "hoặc gán cho knowledge base nội dung không tồn tại trong đó không?\n"
-            "Lời khuyên an toàn phổ quát (VD: trời nóng → uống nhiều nước, giảm cường độ vận động) "
-            "nhất quán với dữ liệu thời tiết thực tế được coi là grounded kể cả khi không có trong KB.\n"
+            "Chỉ trả về 'hallucinated' khi output MÂU THUẪN trực tiếp với knowledge base, "
+            "hoặc gán cho knowledge base nội dung không tồn tại trong đó.\n"
+            "Lời khuyên an toàn phổ quát nhất quán với dữ liệu thời tiết thực tế trong output "
+            "(VD: trời nóng → uống nước, giảm cường độ, tránh giờ nắng gắt) "
+            "phải được coi là grounded kể cả khi knowledge base không đề cập.\n"
             "Trả về: 'grounded' hoặc 'hallucinated: <mô tả phần mâu thuẫn>'"
         )
         try:
