@@ -283,6 +283,7 @@ async def call_weather_reporter(
             if "✅" in str(res):
                 ok = True
                 break
+            print(f"    [Reporter] Lỗi gửi tin {i}: {str(res)[:200]}")
             if attempt == 0:
                 print(f"\n    [Reporter] ⚠️ Tin {i} gửi lỗi, retry sau 1s...")
                 await asyncio.sleep(1)

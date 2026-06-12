@@ -158,6 +158,13 @@ def send_telegram_message(message: str, chat_id: str) -> str:
 
     try:
         resp = requests.post(url, json=payload, timeout=10)
+        if resp.status_code == 400:
+            body = resp.text.lower()
+            if "parse" in body or "entit" in body:
+                plain_payload = {"chat_id": chat_id, "text": message}
+                resp2 = requests.post(url, json=plain_payload, timeout=10)
+                resp2.raise_for_status()
+                return "✅ Tin nhắn đã gửi (plain text fallback do lỗi Markdown)."
         resp.raise_for_status()
         return "✅ Tin nhắn đã gửi thành công lên Telegram!"
     except Exception as e:
