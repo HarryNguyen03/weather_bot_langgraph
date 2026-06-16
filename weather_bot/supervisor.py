@@ -622,6 +622,15 @@ async def run_agent(user_message: str, chat_id: str) -> bool:
         },
     )
 
+    # [4b] Kiểm chứng state reset — đọc snapshot state sau khi lượt này chạy xong
+    snapshot = _supervisor_graph.get_state({"configurable": {"thread_id": chat_id}})
+    sv = snapshot.values
+    print(f"\n  [STATE CHECK] retry_count={sv.get('retry_count')} "
+          f"| validator_feedback={sv.get('validator_feedback')} "
+          f"| forecast_json={'SET' if sv.get('forecast_json') else 'None'} "
+          f"| rag_docs={len(sv.get('rag_docs', []))} docs "
+          f"| messages={len(sv.get('messages', []))}")
+
     # ── Log luồng xử lý ───────────────────────────────────────────────────
 
     print("\n📋 LUỒNG XỬ LÝ:")
