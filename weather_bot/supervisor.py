@@ -667,4 +667,34 @@ async def run_agent(user_message: str, chat_id: str) -> bool:
         for msg in result["messages"]
         if type(msg).__name__ == "ToolMessage"
     )
+
+    # ── Safety-net ────────────────────────────────────────────────────────
+    # Nếu supervisor kết thúc với AIMessage content thường mà KHÔNG gọi tool
+    # (quên gửi), nội dung đó không bao giờ tới Telegram. Tự gửi qua MCP.
+    if not delivered:
+        last = result["messages"][-1] if result["messages"] else None
+        if (last is not None
+                and type(last).__name__ == "AIMessage"
+                and not getattr(last, "tool_calls", None)):
+            content = getattr(last, "content", "") or ""
+            if isinstance(content, list):
+                content = "".join(
+                    item.get("text", "") if isinstance(item, dict) else str(item)
+                    for item in content
+                )
+            content = str(content).strip()
+            if content:
+                try:
+                    raw_send_tool = next(
+                        t for t in _all_tools if t.name == "send_telegram_message"
+                    )
+                    res = await raw_send_tool.ainvoke(
+                        {"message": content, "chat_id": chat_id}
+                    )
+                    if "✅" in str(res):
+                        delivered = True
+                        print("\n[Safety-net] Đã gửi content của supervisor trực tiếp")
+                except Exception as exc:
+                    logger.warning(f"[Safety-net] Gửi trực tiếp lỗi: {exc}")
+
     return delivered
