@@ -492,6 +492,34 @@ async def force_retry_node(state: State) -> dict:
     )]}
 
 
+async def force_reporter_node(state: State) -> dict:
+    """Bypass LLM — tạo tool call call_weather_reporter trực tiếp để đảm bảo reporter chạy sau khi validator PASS."""
+    # Lấy analysis từ ToolMessage call_weather_analyst gần nhất (output đã PASS validator)
+    analysis = ""
+    for msg in reversed(state["messages"]):
+        if (type(msg).__name__ == "ToolMessage"
+                and getattr(msg, "name", "") == "call_weather_analyst"):
+            content = msg.content
+            if isinstance(content, list):
+                content = "".join(
+                    item.get("text", "") if isinstance(item, dict) else str(item)
+                    for item in content
+                )
+            analysis = str(content or "")
+            break
+
+    print(f"\n  [VALIDATOR] Force reporter → call_weather_reporter (analysis: {analysis[:80]}...)")
+    return {"messages": [AIMessage(
+        content="",
+        tool_calls=[{
+            "name": "call_weather_reporter",
+            "args": {"analysis": analysis},
+            "id":   "forcerep_" + uuid4().hex[:8],
+            "type": "tool_call",
+        }],
+    )]}
+
+
 # ---------------------------------------------------------------------------
 # Graph edge functions
 # ---------------------------------------------------------------------------
@@ -514,8 +542,8 @@ def should_retry(state: State) -> str:
     if state.get("validator_feedback") is not None and state.get("retry_count", 0) <= 2:
         print(f"\n  [VALIDATOR] → Retry analyst (lần {state['retry_count']})")
         return "force_retry"
-    print(f"\n  [VALIDATOR] → Tiếp tục reporter")
-    return "reporter"
+    print(f"\n  [VALIDATOR] → Force reporter (deterministic)")
+    return "force_reporter"
 
 
 def should_continue(state: State) -> str:
@@ -563,6 +591,7 @@ async def init_resources():
     graph.add_node("tools",       tool_node)
     graph.add_node("validator",   validate_analyst_output)
     graph.add_node("force_retry", force_retry_node)
+    graph.add_node("force_reporter", force_reporter_node)
     graph.add_edge(START, "agent")
     graph.add_conditional_edges(
         "agent",
@@ -577,9 +606,10 @@ async def init_resources():
     graph.add_conditional_edges(
         "validator",
         should_retry,
-        {"force_retry": "force_retry", "reporter": "agent"},
+        {"force_retry": "force_retry", "force_reporter": "force_reporter"},
     )
     graph.add_edge("force_retry", "tools")
+    graph.add_edge("force_reporter", "tools")
 
     _checkpointer = InMemorySaver()
     _supervisor_graph = graph.compile(checkpointer=_checkpointer)
