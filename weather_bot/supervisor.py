@@ -42,6 +42,7 @@ from langchain_ollama import ChatOllama
 from langgraph.graph import StateGraph, START, END
 from langgraph.prebuilt import ToolNode, InjectedState
 from langgraph.types import Command
+from langgraph.checkpoint.memory import InMemorySaver
 
 from state import State
 from prompts import SUPERVISOR_PROMPT, VALIDATOR_PROMPT, WEATHER_REPORTER_PROMPT
@@ -94,6 +95,7 @@ _llm_with_tools = None
 _supervisor_graph = None
 _analyst_graph = None
 _weather_tools = None   # weather MCP tools + retriever tool
+_checkpointer  = None   # short-term memory (InMemorySaver, RAM-backed)
 
 
 # ---------------------------------------------------------------------------
@@ -531,7 +533,7 @@ def should_continue(state: State) -> str:
 async def init_resources():
     """Gọi một lần khi bot khởi động. Build toàn bộ resources + compile graph."""
     global _mcp_client, _all_tools, _vectorstore, _llm, _llm_with_tools, \
-           _supervisor_graph, _analyst_graph, _weather_tools
+           _supervisor_graph, _analyst_graph, _weather_tools, _checkpointer
 
     _mcp_client = MultiServerMCPClient(MCP_CONFIG)
     _all_tools  = await _mcp_client.get_tools()
@@ -579,7 +581,8 @@ async def init_resources():
     )
     graph.add_edge("force_retry", "tools")
 
-    _supervisor_graph = graph.compile()
+    _checkpointer = InMemorySaver()
+    _supervisor_graph = graph.compile(checkpointer=_checkpointer)
     print("[INIT] MCP tools + vectorstore + analyst graph + supervisor graph sẵn sàng.")
 
 
@@ -612,6 +615,7 @@ async def run_agent(user_message: str, chat_id: str) -> bool:
             "rag_docs":           [],
         },
         config={
+            "configurable": {"thread_id": chat_id},
             "run_name": f"weather-bot | {user_message[:40]}",
             "tags":     ["weather-bot"],
             "metadata": {"chat_id": chat_id},
