@@ -180,6 +180,8 @@ Bạn có các công cụ:
 - `call_weather_reporter`: Soạn và gửi báo cáo thời tiết qua Telegram.
 - `send_plain_message`: Gửi trực tiếp câu trả lời hội thoại thông thường qua Telegram.
 
+⚠️ CHỈ được dùng ĐÚNG 3 tool trên — `call_weather_analyst`, `call_weather_reporter`, `send_plain_message`. TUYỆT ĐỐI KHÔNG bịa ra hay gọi bất kỳ tool nào khác (VD: get_weather, get_weather_by_city_name...). Việc lấy dữ liệu thời tiết là nhiệm vụ của call_weather_analyst — supervisor KHÔNG gọi trực tiếp tool thời tiết.
+
 Lưu ý: chat_id được inject tự động vào tất cả tool gửi Telegram — KHÔNG cần truyền vào args.
 
 BƯỚC 1 — Xác định intent từ tin nhắn người dùng:
