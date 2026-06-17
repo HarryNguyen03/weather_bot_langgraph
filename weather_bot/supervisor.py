@@ -36,6 +36,7 @@ from pathlib import Path
 from dotenv import load_dotenv
 from uuid import uuid4
 from langchain_core.messages import AIMessage, SystemMessage, ToolMessage
+from langchain_core.messages.utils import trim_messages, count_tokens_approximately
 from langchain_core.tools import tool
 from langchain_mcp_adapters.client import MultiServerMCPClient
 from langchain_ollama import ChatOllama
@@ -452,7 +453,22 @@ async def validate_analyst_output(state: State) -> dict:
 
 async def agent_node(state: State) -> dict:
     """LLM node — quyết định tool nào cần gọi tiếp theo."""
-    msgs = [SystemMessage(content=SUPERVISOR_PROMPT)] + list(state["messages"])
+    # [4c] Trim history trước khi gọi LLM — chỉ cắt lúc đọc, KHÔNG xóa khỏi state.
+    # Checkpointer vẫn giữ full messages; đây chỉ giảm tải cho gemma mỗi lượt.
+    trimmed = trim_messages(
+        state["messages"],
+        strategy="last",                          # giữ các message MỚI nhất
+        token_counter=count_tokens_approximately, # ước lượng, không cần tokenizer thật
+        max_tokens=3500,                          # ngân sách cho history (chưa kể system prompt)
+        start_on="human",                         # cắt ở ranh giới sạch: đoạn giữ phải bắt đầu bằng HumanMessage
+        end_on=("human", "tool"),                 # kết thúc hợp lệ ở human hoặc tool result
+        include_system=False,                     # system prompt mình tự thêm riêng bên dưới
+        allow_partial=False,                      # KHÔNG cắt nửa chừng một message
+    )
+    msgs = [SystemMessage(content=SUPERVISOR_PROMPT)] + list(trimmed)
+
+    # [4c] Log để quan sát hiệu quả trim
+    print(f"\n  [TRIM] messages: {len(state['messages'])} → {len(trimmed)} (giữ lại sau trim)")
 
     # [VALIDATOR] Inject feedback hint khi đang trong retry loop
     if state.get("validator_feedback") and state.get("retry_count", 0) <= 2:
