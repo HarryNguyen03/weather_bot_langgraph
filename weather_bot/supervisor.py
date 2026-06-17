@@ -36,12 +36,14 @@ from pathlib import Path
 from dotenv import load_dotenv
 from uuid import uuid4
 from langchain_core.messages import AIMessage, SystemMessage, ToolMessage
+from langchain_core.messages.utils import trim_messages, count_tokens_approximately
 from langchain_core.tools import tool
 from langchain_mcp_adapters.client import MultiServerMCPClient
 from langchain_ollama import ChatOllama
 from langgraph.graph import StateGraph, START, END
 from langgraph.prebuilt import ToolNode, InjectedState
 from langgraph.types import Command
+from langgraph.checkpoint.memory import InMemorySaver
 
 from state import State
 from prompts import SUPERVISOR_PROMPT, VALIDATOR_PROMPT, WEATHER_REPORTER_PROMPT
@@ -94,6 +96,7 @@ _llm_with_tools = None
 _supervisor_graph = None
 _analyst_graph = None
 _weather_tools = None   # weather MCP tools + retriever tool
+_checkpointer  = None   # short-term memory (InMemorySaver, RAM-backed)
 
 
 # ---------------------------------------------------------------------------
@@ -450,7 +453,22 @@ async def validate_analyst_output(state: State) -> dict:
 
 async def agent_node(state: State) -> dict:
     """LLM node — quyết định tool nào cần gọi tiếp theo."""
-    msgs = [SystemMessage(content=SUPERVISOR_PROMPT)] + list(state["messages"])
+    # [4c] Trim history trước khi gọi LLM — chỉ cắt lúc đọc, KHÔNG xóa khỏi state.
+    # Checkpointer vẫn giữ full messages; đây chỉ giảm tải cho gemma mỗi lượt.
+    trimmed = trim_messages(
+        state["messages"],
+        strategy="last",                          # giữ các message MỚI nhất
+        token_counter=count_tokens_approximately, # ước lượng, không cần tokenizer thật
+        max_tokens=3500,                          # ngân sách cho history (chưa kể system prompt)
+        start_on="human",                         # cắt ở ranh giới sạch: đoạn giữ phải bắt đầu bằng HumanMessage
+        end_on=("human", "tool"),                 # kết thúc hợp lệ ở human hoặc tool result
+        include_system=False,                     # system prompt mình tự thêm riêng bên dưới
+        allow_partial=False,                      # KHÔNG cắt nửa chừng một message
+    )
+    msgs = [SystemMessage(content=SUPERVISOR_PROMPT)] + list(trimmed)
+
+    # [4c] Log để quan sát hiệu quả trim
+    print(f"\n  [TRIM] messages: {len(state['messages'])} → {len(trimmed)} (giữ lại sau trim)")
 
     # [VALIDATOR] Inject feedback hint khi đang trong retry loop
     if state.get("validator_feedback") and state.get("retry_count", 0) <= 2:
@@ -490,6 +508,34 @@ async def force_retry_node(state: State) -> dict:
     )]}
 
 
+async def force_reporter_node(state: State) -> dict:
+    """Bypass LLM — tạo tool call call_weather_reporter trực tiếp để đảm bảo reporter chạy sau khi validator PASS."""
+    # Lấy analysis từ ToolMessage call_weather_analyst gần nhất (output đã PASS validator)
+    analysis = ""
+    for msg in reversed(state["messages"]):
+        if (type(msg).__name__ == "ToolMessage"
+                and getattr(msg, "name", "") == "call_weather_analyst"):
+            content = msg.content
+            if isinstance(content, list):
+                content = "".join(
+                    item.get("text", "") if isinstance(item, dict) else str(item)
+                    for item in content
+                )
+            analysis = str(content or "")
+            break
+
+    print(f"\n  [VALIDATOR] Force reporter → call_weather_reporter (analysis: {analysis[:80]}...)")
+    return {"messages": [AIMessage(
+        content="",
+        tool_calls=[{
+            "name": "call_weather_reporter",
+            "args": {"analysis": analysis},
+            "id":   "forcerep_" + uuid4().hex[:8],
+            "type": "tool_call",
+        }],
+    )]}
+
+
 # ---------------------------------------------------------------------------
 # Graph edge functions
 # ---------------------------------------------------------------------------
@@ -512,8 +558,8 @@ def should_retry(state: State) -> str:
     if state.get("validator_feedback") is not None and state.get("retry_count", 0) <= 2:
         print(f"\n  [VALIDATOR] → Retry analyst (lần {state['retry_count']})")
         return "force_retry"
-    print(f"\n  [VALIDATOR] → Tiếp tục reporter")
-    return "reporter"
+    print(f"\n  [VALIDATOR] → Force reporter (deterministic)")
+    return "force_reporter"
 
 
 def should_continue(state: State) -> str:
@@ -531,7 +577,7 @@ def should_continue(state: State) -> str:
 async def init_resources():
     """Gọi một lần khi bot khởi động. Build toàn bộ resources + compile graph."""
     global _mcp_client, _all_tools, _vectorstore, _llm, _llm_with_tools, \
-           _supervisor_graph, _analyst_graph, _weather_tools
+           _supervisor_graph, _analyst_graph, _weather_tools, _checkpointer
 
     _mcp_client = MultiServerMCPClient(MCP_CONFIG)
     _all_tools  = await _mcp_client.get_tools()
@@ -561,6 +607,7 @@ async def init_resources():
     graph.add_node("tools",       tool_node)
     graph.add_node("validator",   validate_analyst_output)
     graph.add_node("force_retry", force_retry_node)
+    graph.add_node("force_reporter", force_reporter_node)
     graph.add_edge(START, "agent")
     graph.add_conditional_edges(
         "agent",
@@ -575,11 +622,13 @@ async def init_resources():
     graph.add_conditional_edges(
         "validator",
         should_retry,
-        {"force_retry": "force_retry", "reporter": "agent"},
+        {"force_retry": "force_retry", "force_reporter": "force_reporter"},
     )
     graph.add_edge("force_retry", "tools")
+    graph.add_edge("force_reporter", "tools")
 
-    _supervisor_graph = graph.compile()
+    _checkpointer = InMemorySaver()
+    _supervisor_graph = graph.compile(checkpointer=_checkpointer)
     print("[INIT] MCP tools + vectorstore + analyst graph + supervisor graph sẵn sàng.")
 
 
@@ -612,11 +661,21 @@ async def run_agent(user_message: str, chat_id: str) -> bool:
             "rag_docs":           [],
         },
         config={
+            "configurable": {"thread_id": chat_id},
             "run_name": f"weather-bot | {user_message[:40]}",
             "tags":     ["weather-bot"],
             "metadata": {"chat_id": chat_id},
         },
     )
+
+    # [4b] Kiểm chứng state reset — đọc snapshot state sau khi lượt này chạy xong
+    snapshot = _supervisor_graph.get_state({"configurable": {"thread_id": chat_id}})
+    sv = snapshot.values
+    print(f"\n  [STATE CHECK] retry_count={sv.get('retry_count')} "
+          f"| validator_feedback={sv.get('validator_feedback')} "
+          f"| forecast_json={'SET' if sv.get('forecast_json') else 'None'} "
+          f"| rag_docs={len(sv.get('rag_docs', []))} docs "
+          f"| messages={len(sv.get('messages', []))}")
 
     # ── Log luồng xử lý ───────────────────────────────────────────────────
 
@@ -663,4 +722,34 @@ async def run_agent(user_message: str, chat_id: str) -> bool:
         for msg in result["messages"]
         if type(msg).__name__ == "ToolMessage"
     )
+
+    # ── Safety-net ────────────────────────────────────────────────────────
+    # Nếu supervisor kết thúc với AIMessage content thường mà KHÔNG gọi tool
+    # (quên gửi), nội dung đó không bao giờ tới Telegram. Tự gửi qua MCP.
+    if not delivered:
+        last = result["messages"][-1] if result["messages"] else None
+        if (last is not None
+                and type(last).__name__ == "AIMessage"
+                and not getattr(last, "tool_calls", None)):
+            content = getattr(last, "content", "") or ""
+            if isinstance(content, list):
+                content = "".join(
+                    item.get("text", "") if isinstance(item, dict) else str(item)
+                    for item in content
+                )
+            content = str(content).strip()
+            if content:
+                try:
+                    raw_send_tool = next(
+                        t for t in _all_tools if t.name == "send_telegram_message"
+                    )
+                    res = await raw_send_tool.ainvoke(
+                        {"message": content, "chat_id": chat_id}
+                    )
+                    if "✅" in str(res):
+                        delivered = True
+                        print("\n[Safety-net] Đã gửi content của supervisor trực tiếp")
+                except Exception as exc:
+                    logger.warning(f"[Safety-net] Gửi trực tiếp lỗi: {exc}")
+
     return delivered

@@ -187,6 +187,7 @@ BƯỚC 1 — Xác định intent từ tin nhắn người dùng:
 - Người dùng hỏi DỰ BÁO (5 ngày tới, tuần tới, sắp tới) → intent = "forecast"
 - Người dùng hỏi CẢ HAI → intent = "both"
 - Người dùng chỉ gửi tên thành phố không rõ ý → mặc định intent = "current"
+- Người dùng hỏi thời tiết NHƯNG không nêu địa danh và không thể suy ra từ ngữ cảnh hội thoại trước đó → KHÔNG được trả lời bằng văn bản thường. PHẢI gọi `send_plain_message` với nội dung hỏi lại địa danh, ví dụ: "không có tên địa điểm tìm kiểu gì bro?"
 - Tin nhắn không liên quan thời tiết → soạn câu trả lời thân thiện bằng tiếng Việt
   rồi gọi `send_plain_message` để gửi ngay, bỏ qua các bước còn lại.
 
@@ -195,4 +196,6 @@ BƯỚC 2 — Gọi `call_weather_analyst` với task string theo format:
 
 BƯỚC 3 — Gọi `call_weather_reporter` với toàn bộ kết quả từ bước 2,
 giữ nguyên tag [INTENT:{intent}] ở đầu khi truyền vào.
+
+QUY TẮC BẮT BUỘC: Mọi phản hồi tới người dùng PHẢI đi qua một tool (send_plain_message / call_weather_reporter). TUYỆT ĐỐI không trả lời bằng văn bản thường mà không gọi tool — văn bản thường sẽ không được gửi tới người dùng.
 """
