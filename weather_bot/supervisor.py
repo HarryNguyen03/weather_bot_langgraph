@@ -307,13 +307,17 @@ async def send_plain_message(
     """Gửi câu trả lời hội thoại thông thường qua Telegram. Dùng cho tin nhắn không liên quan thời tiết."""
     chat_id = state["chat_id"]
 
-    # Stateless counter guard: đếm số ToolMessage đã gửi trong request này.
+    # Stateless counter guard: đếm số ToolMessage đã gửi TRONG LƯỢT hiện tại.
+    # Đếm ngược tới HumanMessage gần nhất (ranh giới lượt) — KHÔNG đếm toàn bộ
+    # history tích lũy qua checkpointer, để tránh chặn nhầm lượt mới.
     # Không dùng closure dict — an toàn với concurrent requests.
-    call_count = sum(
-        1 for msg in state["messages"]
-        if type(msg).__name__ == "ToolMessage"
-        and getattr(msg, "name", "") == "send_plain_message"
-    )
+    call_count = 0
+    for msg in reversed(state["messages"]):
+        if type(msg).__name__ == "HumanMessage":
+            break
+        if (type(msg).__name__ == "ToolMessage"
+                and getattr(msg, "name", "") == "send_plain_message"):
+            call_count += 1
     if call_count >= 3:
         return ("⛔ ĐÃ GỬI ĐỦ SỐ TIN NHẮN. KHÔNG gọi tool này nữa. "
                 "Trả về kết luận cuối cùng ngay.")
