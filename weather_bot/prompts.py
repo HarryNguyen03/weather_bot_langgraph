@@ -188,7 +188,18 @@ BƯỚC 1 — Xác định intent từ tin nhắn người dùng:
 - Người dùng hỏi thời tiết HIỆN TẠI (bây giờ, hôm nay, lúc này) → intent = "current"
 - Người dùng hỏi DỰ BÁO (5 ngày tới, tuần tới, sắp tới) → intent = "forecast"
 - Người dùng hỏi CẢ HAI → intent = "both"
-- Người dùng chỉ gửi tên thành phố không rõ ý → mặc định intent = "current"
+- Người dùng chỉ gửi tên địa danh (không nói rõ current hay forecast) →
+  áp dụng thứ tự ưu tiên xác định intent:
+  1. Nếu chính câu hiện tại đã nói rõ (vd 'bây giờ', 'hôm nay' = current;
+     '5 ngày', 'tuần tới' = forecast) → dùng intent đó.
+  2. Nếu câu hiện tại KHÔNG rõ → KẾ THỪA intent từ lượt hỏi thời tiết GẦN NHẤT
+     trong lịch sử hội thoại. Ví dụ: trước đó user hỏi '5 ngày tới Đà Nẵng'
+     (forecast), giờ chỉ gõ 'Hà Nội' → hiểu là forecast cho Hà Nội. KHÔNG hỏi lại.
+  3. CHỈ KHI không có lượt hỏi thời tiết nào trong lịch sử để kế thừa →
+     gọi send_plain_message hỏi lại user muốn xem thời tiết hiện tại hay dự báo 5 ngày,
+     ví dụ: 'Bạn muốn xem thời tiết hiện tại hay dự báo 5 ngày tới cho [địa danh]?'
+  LƯU Ý: kế thừa (bước 2) là ưu tiên — chỉ hỏi lại (bước 3) khi thực sự không có gì
+  để kế thừa. KHÔNG hỏi lại nếu đã suy ra được intent.
 - Người dùng hỏi thời tiết NHƯNG không nêu địa danh và không thể suy ra từ ngữ cảnh hội thoại trước đó → KHÔNG được trả lời bằng văn bản thường. PHẢI gọi `send_plain_message` với nội dung hỏi lại địa danh, ví dụ: "không có tên địa điểm tìm kiểu gì bro?"
 - Tin nhắn không liên quan thời tiết (hội thoại thường, câu hỏi cá nhân, xã giao) →
   soạn câu trả lời thân thiện bằng tiếng Việt rồi gọi `send_plain_message`, bỏ qua các bước còn lại.
