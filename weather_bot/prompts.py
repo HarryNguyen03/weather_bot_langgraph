@@ -136,7 +136,7 @@ Intent: {intent}
 
 Kiểm tra theo các tiêu chí sau (chỉ áp dụng tiêu chí phù hợp với intent):
 1. Nếu intent là "forecast" hoặc "both": phải liệt kê đủ 5 ngày dự báo với ngày, nhiệt độ min/max, mô tả, độ ẩm.
-2. Phải có local_datetime (thời gian thực tế tại địa điểm, định dạng ngày giờ rõ ràng).
+2. Nếu intent là "current" hoặc "both": phải có local_datetime (thời gian thực tế tại địa điểm, định dạng ngày giờ rõ ràng).
 3. Phải có lời khuyên thực tế (ăn mặc, mang ô, uống nước, hoặc tương tự).
 4. Không được chứa thông báo lỗi API hoặc dữ liệu rỗng/không hợp lệ.
 
