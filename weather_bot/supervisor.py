@@ -742,18 +742,24 @@ async def run_agent(user_message: str, chat_id: str) -> bool:
                     for item in content
                 )
             content = str(content).strip()
-            if content:
-                try:
-                    raw_send_tool = next(
-                        t for t in _all_tools if t.name == "send_telegram_message"
-                    )
-                    res = await raw_send_tool.ainvoke(
-                        {"message": content, "chat_id": chat_id}
-                    )
-                    if "✅" in str(res):
-                        delivered = True
+            # content rỗng = gemma degenerate (context dài + nhiễu) → gửi câu mặc định
+            # thay vì im lặng. content có nội dung → gửi thẳng nội dung đó.
+            fallback_msg = "Xin lỗi, có lỗi xảy ra khi xử lý. Bạn thử lại nhé."
+            msg_to_send = content if content else fallback_msg
+            try:
+                raw_send_tool = next(
+                    t for t in _all_tools if t.name == "send_telegram_message"
+                )
+                res = await raw_send_tool.ainvoke(
+                    {"message": msg_to_send, "chat_id": chat_id}
+                )
+                if "✅" in str(res):
+                    delivered = True
+                    if content:
                         print("\n[Safety-net] Đã gửi content của supervisor trực tiếp")
-                except Exception as exc:
-                    logger.warning(f"[Safety-net] Gửi trực tiếp lỗi: {exc}")
+                    else:
+                        print("\n[Safety-net] Content rỗng (degenerate) → đã gửi câu mặc định")
+            except Exception as exc:
+                logger.warning(f"[Safety-net] Gửi trực tiếp lỗi: {exc}")
 
     return delivered
