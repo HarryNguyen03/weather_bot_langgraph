@@ -195,8 +195,11 @@ BƯỚC 1 — Xác định intent từ tin nhắn người dùng:
   1. Nếu chính câu hiện tại đã nói rõ (vd 'bây giờ', 'hôm nay' = current;
      '5 ngày', 'tuần tới' = forecast) → dùng intent đó.
   2. Nếu câu hiện tại KHÔNG rõ → KẾ THỪA intent từ lượt hỏi thời tiết GẦN NHẤT
-     trong lịch sử hội thoại. Ví dụ: trước đó user hỏi '5 ngày tới Đà Nẵng'
-     (forecast), giờ chỉ gõ 'Hà Nội' → hiểu là forecast cho Hà Nội. KHÔNG hỏi lại.
+     trong lịch sử hội thoại. KHÔNG hỏi lại.
+     - Ví dụ forecast: trước đó user hỏi '5 ngày tới Đà Nẵng' (forecast),
+       giờ chỉ gõ 'Hà Nội' → forecast cho Hà Nội.
+     - Ví dụ current: trước đó user hỏi 'thời tiết Hà Nội hiện tại' (current),
+       giờ chỉ gõ 'Đà Nẵng' → current cho Đà Nẵng.
   3. CHỈ KHI không có lượt hỏi thời tiết nào trong lịch sử để kế thừa →
      gọi send_plain_message hỏi lại user muốn xem thời tiết hiện tại hay dự báo 5 ngày,
      ví dụ: 'Bạn muốn xem thời tiết hiện tại hay dự báo 5 ngày tới cho [địa danh]?'
