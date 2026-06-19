@@ -307,13 +307,17 @@ async def send_plain_message(
     """Gửi câu trả lời hội thoại thông thường qua Telegram. Dùng cho tin nhắn không liên quan thời tiết."""
     chat_id = state["chat_id"]
 
-    # Stateless counter guard: đếm số ToolMessage đã gửi trong request này.
+    # Stateless counter guard: đếm số ToolMessage đã gửi TRONG LƯỢT hiện tại.
+    # Đếm ngược tới HumanMessage gần nhất (ranh giới lượt) — KHÔNG đếm toàn bộ
+    # history tích lũy qua checkpointer, để tránh chặn nhầm lượt mới.
     # Không dùng closure dict — an toàn với concurrent requests.
-    call_count = sum(
-        1 for msg in state["messages"]
-        if type(msg).__name__ == "ToolMessage"
-        and getattr(msg, "name", "") == "send_plain_message"
-    )
+    call_count = 0
+    for msg in reversed(state["messages"]):
+        if type(msg).__name__ == "HumanMessage":
+            break
+        if (type(msg).__name__ == "ToolMessage"
+                and getattr(msg, "name", "") == "send_plain_message"):
+            call_count += 1
     if call_count >= 3:
         return ("⛔ ĐÃ GỬI ĐỦ SỐ TIN NHẮN. KHÔNG gọi tool này nữa. "
                 "Trả về kết luận cuối cùng ngay.")
@@ -738,18 +742,24 @@ async def run_agent(user_message: str, chat_id: str) -> bool:
                     for item in content
                 )
             content = str(content).strip()
-            if content:
-                try:
-                    raw_send_tool = next(
-                        t for t in _all_tools if t.name == "send_telegram_message"
-                    )
-                    res = await raw_send_tool.ainvoke(
-                        {"message": content, "chat_id": chat_id}
-                    )
-                    if "✅" in str(res):
-                        delivered = True
+            # content rỗng = gemma degenerate (context dài + nhiễu) → gửi câu mặc định
+            # thay vì im lặng. content có nội dung → gửi thẳng nội dung đó.
+            fallback_msg = "Xin lỗi, có lỗi xảy ra khi xử lý. Bạn thử lại nhé."
+            msg_to_send = content if content else fallback_msg
+            try:
+                raw_send_tool = next(
+                    t for t in _all_tools if t.name == "send_telegram_message"
+                )
+                res = await raw_send_tool.ainvoke(
+                    {"message": msg_to_send, "chat_id": chat_id}
+                )
+                if "✅" in str(res):
+                    delivered = True
+                    if content:
                         print("\n[Safety-net] Đã gửi content của supervisor trực tiếp")
-                except Exception as exc:
-                    logger.warning(f"[Safety-net] Gửi trực tiếp lỗi: {exc}")
+                    else:
+                        print("\n[Safety-net] Content rỗng (degenerate) → đã gửi câu mặc định")
+            except Exception as exc:
+                logger.warning(f"[Safety-net] Gửi trực tiếp lỗi: {exc}")
 
     return delivered
